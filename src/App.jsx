@@ -18,6 +18,8 @@ export default function App() {
   const [voting, setVoting] = useState(false)
   const [error, setError] = useState('')
   const [chosenVote, setChosenVote] = useState(null)
+  const [votePulse, setVotePulse] = useState(null)
+  const [animationResult, setAnimationResult] = useState(null)
   const voterToken = useMemo(() => getVoterToken(), [])
 
   const question = questions[index]
@@ -60,6 +62,7 @@ export default function App() {
     setVoting(true)
     setError('')
     setChosenVote(vote)
+    setVotePulse(vote ? 'yes' : 'no')
 
     const { data, error: voteError } = await supabase.rpc('submit_vote', {
       p_question_id: question.id,
@@ -71,18 +74,36 @@ export default function App() {
       setError(voteError.message)
       setVoting(false)
       setChosenVote(null)
+      setVotePulse(null)
       return
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 520))
-    setResult(Array.isArray(data) ? data[0] : null)
+    const nextResult = Array.isArray(data) ? data[0] : null
+    setAnimationResult(nextResult)
+    // Reveal the result while the final sparks are still fading.
+    await new Promise((resolve) => setTimeout(resolve, 770))
+    setResult(nextResult)
+    await new Promise((resolve) => setTimeout(resolve, 350))
+    setVotePulse(null)
+    setAnimationResult(null)
     setVoting(false)
+  }
+
+  async function skipQuestion() {
+    if (voting) return
+    const nextIndex = index + 1
+    setResult(null)
+    setChosenVote(null)
+    setError('')
+    setIndex(nextIndex)
+    if (nextIndex < questions.length) await restoreResult(questions[nextIndex].id)
   }
 
   async function nextQuestion() {
     const nextIndex = index + 1
     setResult(null)
     setChosenVote(null)
+    setAnimationResult(null)
     setIndex(nextIndex)
     if (nextIndex < questions.length) await restoreResult(questions[nextIndex].id)
   }
@@ -145,12 +166,8 @@ export default function App() {
       <section className="stage">
         <AnimatePresence mode="wait">
           <motion.article
-            key={`${question.id}-${result ? 'result' : 'question'}`}
-            className="question"
-            initial={{ opacity: 0, y: 18, scale: .985 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -18, scale: .985 }}
-            transition={{ duration: .42, ease: [0.22, 1, 0.36, 1] }}
+            key={question.id}
+            className={`question ${votePulse ? `vote-transition ${votePulse}` : ''}`}
           >
             <div className="meta">
               <span>{question.category || 'TODAY'}</span>
@@ -159,18 +176,22 @@ export default function App() {
 
             <h1>{question.prompt || question.question}</h1>
 
-            {!result ? (
-              <>
-                <ParticleBridge active={chosenVote !== null} />
-                <div className="votes">
-                  <VoteButton label={question.yes_label || 'YES'} kind="yes" active={chosenVote === true} disabled={voting} onClick={() => submitVote(true)} />
-                  <VoteButton label={question.no_label || 'NO'} kind="no" active={chosenVote === false} disabled={voting} onClick={() => submitVote(false)} />
+            <VoteJourney active={Boolean(votePulse)} vote={chosenVote} result={animationResult || result} />
+
+            <div className={`response-zone ${result ? 'show-result' : ''}`}>
+              {!result && (
+                <div className="vote-choice-area">
+                  <div className="votes vote-layer">
+                    <VoteButton label={question.yes_label || 'YES'} kind="yes" active={chosenVote === true} disabled={voting} onClick={() => submitVote(true)} />
+                    <VoteButton label={question.no_label || 'NO'} kind="no" active={chosenVote === false} disabled={voting} onClick={() => submitVote(false)} />
+                  </div>
+                  <button className="not-for-me" type="button" disabled={voting} onClick={skipQuestion}>
+                    Not for me <span aria-hidden="true">→</span>
+                  </button>
                 </div>
-                <p className="hint">Vote to reveal what others think.</p>
-              </>
-            ) : (
-              <Results result={result} onNext={nextQuestion} isLast={index === questions.length - 1} />
-            )}
+              )}
+              {result && <Results result={result} onNext={nextQuestion} isLast={index === questions.length - 1} />}
+            </div>
 
             {error && <p className="inline-error">{error}</p>}
           </motion.article>
@@ -182,30 +203,89 @@ export default function App() {
   )
 }
 
-function VoteButton({ label, kind, active, disabled, onClick }) {
-  return <motion.button className={`vote ${kind} ${active ? 'active' : ''}`} whileHover={{ y: -4, scale: 1.025 }} whileTap={{ scale: .96 }} disabled={disabled} onClick={onClick}>{label}</motion.button>
+function VoteJourney({ active, vote, result }) {
+  const yesPercent = numeric(result?.yes_percent)
+  const particles = Array.from({ length: 76 }, (_, i) => {
+    const isYes = result ? i < Math.round((yesPercent / 100) * 76) : i % 2 === 0
+    const angle = (i * 137.5) * Math.PI / 180
+    const radius = 34 + ((i * 29) % 250)
+    return {
+      x: Math.cos(angle) * radius,
+      y: Math.sin(angle) * radius * .62,
+      yes: isYes,
+      delay: .88 + (i % 12) * .026,
+      size: 2 + (i % 4),
+    }
+  })
+
+  return (
+    <div className={`vote-journey ${active ? 'running' : ''} ${vote === true ? 'yes' : vote === false ? 'no' : ''}`} aria-hidden="true">
+      <span className="gather-ring" />
+      <span className="traveller-trail" />
+      <span className="traveller" />
+      <div className="community-field">
+        {particles.map((p, i) => (
+          <span key={i} className={`community-dot ${p.yes ? 'yes-dot' : 'no-dot'}`} style={{ '--x': `${p.x}px`, '--y': `${p.y}px`, '--delay': `${p.delay}s`, '--size': `${p.size}px` }} />
+        ))}
+        <span className="burst-halo" />
+        <span className="burst-rays" />
+        <span className="arrival-ring" />
+        <span className="spark s1" /><span className="spark s2" /><span className="spark s3" /><span className="spark s4" /><span className="spark s5" /><span className="spark s6" />
+        <span className="my-vote-dot" />
+      </div>
+    </div>
+  )
 }
 
-function ParticleBridge({ active }) {
-  return <div className={`bridge ${active ? 'active' : ''}`}>{Array.from({ length: 18 }).map((_, i) => <i key={i} style={{ '--i': i }} />)}<span /></div>
+function VoteButton({ label, kind, active, disabled, onClick }) {
+  return <motion.button className={`vote ${kind} ${active ? 'active' : ''}`} whileHover={{ y: -4, scale: 1.025 }} whileTap={{ scale: .96 }} disabled={disabled} onClick={onClick}>{label}</motion.button>
 }
 
 function Results({ result, onNext, isLast }) {
   const yes = numeric(result.yes_percent)
   const no = numeric(result.no_percent)
   return (
-    <motion.div className="results" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+    <motion.div className="results" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: .18, ease: [0.22, 1, 0.36, 1] }}>
       <p className="your-vote">You voted <strong>{result.user_vote === true ? 'YES' : 'NO'}</strong>.</p>
-      <ResultBar label="YES" percent={yes} count={numeric(result.yes_count)} kind="yes" />
-      <ResultBar label="NO" percent={no} count={numeric(result.no_count)} kind="no" delay={.08} />
+      <SplitResultBar yes={yes} no={no} />
       <p className="total">{numeric(result.total_count)} total vote{numeric(result.total_count) === 1 ? '' : 's'}</p>
       <button className="primary" onClick={onNext}>{isLast ? 'Complete' : 'Next question'}</button>
     </motion.div>
   )
 }
 
-function ResultBar({ label, percent, count, kind, delay = 0 }) {
-  return <div className="result-row"><div className="result-head"><span>{label}</span><strong>{percent.toFixed(1)}%</strong></div><div className="result-track"><motion.div className={kind} initial={{ width: 0 }} animate={{ width: `${percent}%` }} transition={{ duration: .9, delay, ease: [0.22, 1, 0.36, 1] }} /></div><small>{count} vote{count === 1 ? '' : 's'}</small></div>
+function SplitResultBar({ yes, no }) {
+  const safeYes = Math.max(0, Math.min(100, numeric(yes)))
+  const safeNo = Math.max(0, Math.min(100, numeric(no)))
+  const blend = 3.2
+  const leftBlend = Math.max(0, safeYes - blend)
+  const rightBlend = Math.min(100, safeYes + blend)
+
+  return (
+    <div className="split-result" aria-label={`YES ${safeYes.toFixed(1)}%, NO ${safeNo.toFixed(1)}%`}>
+      <span className="split-label yes-label">YES</span>
+      <div className="liquid-result-track">
+        <motion.div
+          className="liquid-result-fill"
+          initial={{ opacity: 0, scaleX: .985 }}
+          animate={{ opacity: 1, scaleX: 1 }}
+          transition={{ duration: .34, ease: [0.22, 1, 0.36, 1] }}
+          style={{
+            '--yes-stop': `${leftBlend}%`,
+            '--blend-mid': `${safeYes}%`,
+            '--no-start': `${rightBlend}%`,
+          }}
+        >
+          <span className="liquid-sheen" />
+          <span className="liquid-wave wave-one" />
+          <span className="liquid-wave wave-two" />
+        </motion.div>
+        <span className="split-percent yes-percent" style={{ width: `${safeYes}%` }}>{safeYes.toFixed(1)}%</span>
+        <span className="split-percent no-percent" style={{ width: `${safeNo}%` }}>{safeNo.toFixed(1)}%</span>
+      </div>
+      <span className="split-label no-label">NO</span>
+    </div>
+  )
 }
 
 function Ambient({ strong = false }) {
